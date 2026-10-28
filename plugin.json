@@ -1,6 +1,6 @@
 {
   "id": "adaptive-light",
   "name": "Адаптивная подсветка",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "main": "plugin.js"
 }

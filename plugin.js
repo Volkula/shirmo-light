@@ -226,41 +226,13 @@
 
   function settings(env) {
     const state = env.state || {};
-    if (state.auto != null) auto = state.auto !== false;
+    if (state.auto != null && !playing) auto = state.auto !== false;
     const box = document.createElement("div");
     box.className = "plugin-box";
-    const lamps = document.createElement("p");
-    lamps.className = "plugin-label";
-    lamps.textContent = "Лампы";
-    const mode = document.createElement("div");
-    mode.className = "plugin-acts";
-    const autoBtn = document.createElement("button");
-    autoBtn.type = "button";
-    autoBtn.textContent = "Авто";
-    if (auto) autoBtn.className = "is-on";
-    const colorWrap = document.createElement("label");
-    colorWrap.className = "plugin-color";
-    colorWrap.append(document.createTextNode("Свой цвет"));
-    const color = document.createElement("input");
-    color.type = "color";
-    color.value = forcedHex || "#e6c36a";
-    color.setAttribute("aria-label", "Свой цвет");
-    colorWrap.append(color);
-    autoBtn.addEventListener("click", function () {
-      auto = true;
-      autoBtn.className = "is-on";
-      lastKey = "";
-      post(env, "/auto", { on: true }).then(function () { apply(env); }).catch(function (error) { env.note(error.message); });
-    });
-    color.addEventListener("input", function () {
-      auto = false;
-      autoBtn.className = "";
-      forcedHex = color.value;
-      const hsv = hexHsv(color.value);
-      post(env, "/auto", { on: false }).catch(function () {});
-      if (hsv) queue(env, hsv, true);
-    });
-    mode.append(autoBtn, colorWrap);
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.textContent = "Окно подсветки";
+    openBtn.addEventListener("click", function () { openStudio(env); });
     const keyLine = document.createElement("div");
     keyLine.className = "plugin-acts";
     const keyState = document.createElement("span");
@@ -273,7 +245,7 @@
     keySlot.className = "plugin-slot";
     keyBtn.addEventListener("click", function () { keyForm(keySlot, env); });
     keyLine.append(keyState, keyBtn);
-    box.append(lamps, deviceList(env), mode, keyLine, keySlot);
+    box.append(openBtn, keyLine, keySlot);
     return box;
   }
 
@@ -387,6 +359,394 @@
     image.src = imageUrl;
   }
 
+  let animTimer = 0;
+  let playing = "";
+  const MODES = [
+    { id: "candle", name: "Свеча", h: 32, s: 78, v: 74, anim: true, drift: 10, speed: 850 },
+    { id: "fire", name: "Огонь", h: 12, s: 94, v: 100, anim: true, drift: 18, speed: 700 },
+    { id: "tavern", name: "Таверна", h: 28, s: 68, v: 58, anim: true, drift: 5, speed: 1400 },
+    { id: "forest", name: "Лес", h: 118, s: 46, v: 40 },
+    { id: "sea", name: "Море", h: 196, s: 64, v: 56 },
+    { id: "night", name: "Ночь", h: 232, s: 38, v: 26 },
+    { id: "lava", name: "Лава", h: 16, s: 90, v: 76, anim: true, drift: 14, speed: 560 },
+    { id: "snow", name: "Снег", h: 206, s: 24, v: 90 }
+  ];
+
+  function hsvHex(h, s, v) {
+    s /= 100;
+    v /= 100;
+    const c = v * s;
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    const m = v - c;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    return "#" + [r, g, b].map(function (n) { return Math.round((n + m) * 255).toString(16).padStart(2, "0"); }).join("");
+  }
+
+  function lightBag(env) {
+    const campaign = env.campaign();
+    if (!campaign.plugins || typeof campaign.plugins !== "object" || Array.isArray(campaign.plugins)) campaign.plugins = {};
+    if (!campaign.plugins.light || typeof campaign.plugins.light !== "object") campaign.plugins.light = { auto: true, devices: [] };
+    const light = campaign.plugins.light;
+    if (!Array.isArray(light.scenarios)) light.scenarios = [];
+    if (!Array.isArray(light.pins)) light.pins = [];
+    return light;
+  }
+
+  function stopAnim() {
+    clearInterval(animTimer);
+    animTimer = 0;
+  }
+
+  function resumeAuto(env) {
+    stopAnim();
+    playing = "";
+    auto = true;
+    lastKey = "";
+    post(env, "/auto", { on: true }).then(function () { apply(env); }).catch(function () {});
+    repaintDock();
+  }
+
+  function holdManual(env) {
+    if (!auto) return;
+    auto = false;
+    post(env, "/auto", { on: false }).catch(function () {});
+  }
+
+  function esc(text) {
+    return String(text).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function startAnim(env, mode) {
+    stopAnim();
+    let tick = 0;
+    function frame() {
+      tick += 1;
+      const drift = mode.drift || 8;
+      const wave = Math.sin(tick * 1.4);
+      const v = Math.max(12, Math.min(100, Math.round(mode.v + wave * drift)));
+      const h = (mode.h + Math.round(Math.sin(tick * 0.6) * drift * 0.35) + 360) % 360;
+      queue(env, { h: h, s: mode.s, v: v }, true);
+    }
+    frame();
+    animTimer = setInterval(frame, mode.speed || 700);
+  }
+
+  function playSpec(env, spec) {
+    stopAnim();
+    holdManual(env);
+    playing = spec.play;
+    if (spec.anim) startAnim(env, spec);
+    else queue(env, { h: spec.h, s: spec.s, v: spec.v }, true);
+    forcedHex = hsvHex(spec.h, spec.s, spec.v);
+    repaintDock();
+    markStudio();
+  }
+
+  function modeById(id) {
+    return MODES.find(function (mode) { return mode.id === id; }) || null;
+  }
+
+  function playKey(env, key) {
+    if (key.indexOf("mode:") === 0) {
+      const mode = modeById(key.slice(5));
+      if (!mode) return;
+      playSpec(env, { play: key, anim: mode.anim, h: mode.h, s: mode.s, v: mode.v, drift: mode.drift, speed: mode.speed });
+      return;
+    }
+    const row = lightBag(env).scenarios.find(function (item) { return item.id === key; });
+    if (!row) return;
+    const mode = row.mode ? modeById(row.mode) : null;
+    playSpec(env, {
+      play: key,
+      anim: !!(mode && mode.anim) || row.anim === true,
+      h: mode ? mode.h : row.h,
+      s: mode ? mode.s : row.s,
+      v: mode ? mode.v : row.v,
+      drift: mode ? mode.drift : row.drift,
+      speed: mode ? mode.speed : row.speed
+    });
+  }
+
+  function pinLabel(env, key) {
+    if (key.indexOf("mode:") === 0) {
+      const mode = modeById(key.slice(5));
+      return mode ? mode.name : key.slice(5);
+    }
+    const row = lightBag(env).scenarios.find(function (item) { return item.id === key; });
+    return row ? row.name : "Сценарий";
+  }
+
+  function pinColor(env, key) {
+    if (key.indexOf("mode:") === 0) {
+      const mode = modeById(key.slice(5));
+      return mode ? hsvHex(mode.h, mode.s, mode.v) : "#e6c36a";
+    }
+    const row = lightBag(env).scenarios.find(function (item) { return item.id === key; });
+    if (!row) return "#e6c36a";
+    const mode = row.mode ? modeById(row.mode) : null;
+    return hsvHex(mode ? mode.h : row.h, mode ? mode.s : row.s, mode ? mode.v : row.v);
+  }
+
+  function togglePin(env, key) {
+    const light = lightBag(env);
+    const at = light.pins.indexOf(key);
+    if (at >= 0) light.pins.splice(at, 1);
+    else light.pins.push(key);
+    env.save();
+    repaintDock();
+    const root = document.getElementById("light-studio");
+    if (root && !root.hidden && studioEnv) fillStudio(root, studioEnv);
+    else markStudio();
+  }
+
+  function repaintDock() {
+    try { if (window.ShirmoDock && window.ShirmoDock.paint) window.ShirmoDock.paint(); } catch (err) {}
+  }
+
+  function markStudio() {
+    const root = document.getElementById("light-studio");
+    if (!root) return;
+    root.querySelectorAll("[data-play]").forEach(function (node) {
+      node.classList.toggle("is-on", node.getAttribute("data-play") === playing);
+    });
+    const autoBtn = root.querySelector("[data-studio=auto]");
+    if (autoBtn) autoBtn.classList.toggle("is-on", auto && !playing);
+  }
+
+  let studioEnv = null;
+
+  function openStudio(env) {
+    studioEnv = env;
+    let root = document.getElementById("light-studio");
+    if (root) {
+      root.hidden = false;
+      fillStudio(root, env);
+      return;
+    }
+    root = document.createElement("div");
+    root.id = "light-studio";
+    root.className = "light-studio";
+    root.setAttribute("role", "dialog");
+    root.setAttribute("aria-label", "Подсветка");
+    root.innerHTML = '<header class="light-bar"><b>Подсветка</b><button type="button" data-studio="close" aria-label="Закрыть">×</button></header><div class="light-body"></div>';
+    document.body.appendChild(root);
+    const bar = root.querySelector(".light-bar");
+    let drag = null;
+    bar.addEventListener("pointerdown", function (event) {
+      if (event.target.closest("button")) return;
+      const rect = root.getBoundingClientRect();
+      drag = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      bar.setPointerCapture(event.pointerId);
+    });
+    bar.addEventListener("pointermove", function (event) {
+      if (!drag) return;
+      root.style.left = Math.max(8, event.clientX - drag.x) + "px";
+      root.style.top = Math.max(8, event.clientY - drag.y) + "px";
+      root.style.right = "auto";
+    });
+    bar.addEventListener("pointerup", function () { drag = null; });
+    root.querySelector("[data-studio=close]").addEventListener("click", function () { root.hidden = true; });
+    fillStudio(root, env);
+  }
+
+  function fillStudio(root, env) {
+    const body = root.querySelector(".light-body");
+    const state = env.state || {};
+    const light = lightBag(env);
+    const picked = {};
+    (state.devices || []).forEach(function (id) { picked[id] = true; });
+    body.innerHTML = "";
+    const lampsTitle = document.createElement("h3");
+    lampsTitle.textContent = "Лампы";
+    body.append(lampsTitle);
+    const lights = state.lights || [];
+    if (!lights.length) {
+      const empty = document.createElement("p");
+      empty.className = "note";
+      empty.textContent = state.hasKey ? (state.lightError || "Цветных ламп нет.") : "Ключ ещё не сохранён.";
+      body.append(empty);
+    }
+    lights.forEach(function (lamp) {
+      const line = document.createElement("div");
+      line.className = "light-device";
+      const label = document.createElement("label");
+      label.className = "check";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!picked[lamp.id];
+      input.addEventListener("change", function () {
+        const ids = [];
+        body.querySelectorAll(".light-device input").forEach(function (node, index) {
+          if (node.checked) ids.push(lights[index].id);
+        });
+        post(env, "/devices", { ids: ids }).catch(function (error) { env.note(error.message); });
+      });
+      label.append(input, document.createTextNode(lamp.name || "Лампа"));
+      const power = document.createElement("button");
+      power.type = "button";
+      power.textContent = lamp.on ? "Выкл" : "Вкл";
+      power.addEventListener("click", function () {
+        const next = power.textContent === "Вкл";
+        post(env, "/power", { ids: [lamp.id], on: next }).then(function () {
+          power.textContent = next ? "Выкл" : "Вкл";
+          lamp.on = next;
+        }).catch(function (error) { env.note(error.message); });
+      });
+      line.append(label, power);
+      body.append(line);
+    });
+    const modesTitle = document.createElement("h3");
+    modesTitle.textContent = "Режимы";
+    const grid = document.createElement("div");
+    grid.className = "light-modes";
+    MODES.forEach(function (mode) {
+      const card = document.createElement("div");
+      card.className = "light-mode";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-play", "mode:" + mode.id);
+      if (playing === "mode:" + mode.id) button.className = "is-on";
+      const canvas = document.createElement("canvas");
+      canvas.width = 160;
+      canvas.height = 64;
+      const ctx = canvas.getContext("2d");
+      const grad = ctx.createLinearGradient(0, 0, 0, 64);
+      grad.addColorStop(0, "#120e0c");
+      grad.addColorStop(1, hsvHex(mode.h, mode.s, mode.v));
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 160, 64);
+      const caption = document.createElement("span");
+      caption.textContent = mode.name + (mode.anim ? " · анимация" : "");
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.className = "light-pin";
+      const pinned = light.pins.indexOf("mode:" + mode.id) >= 0;
+      pin.textContent = pinned ? "●" : "○";
+      pin.title = pinned ? "Открепить" : "Закрепить в столе";
+      pin.setAttribute("aria-label", (pinned ? "Открепить " : "Закрепить ") + mode.name);
+      pin.addEventListener("click", function () { togglePin(env, "mode:" + mode.id); });
+      button.append(canvas, caption);
+      button.addEventListener("click", function () { playKey(env, "mode:" + mode.id); });
+      card.append(button, pin);
+      grid.append(card);
+    });
+    const colorTitle = document.createElement("h3");
+    colorTitle.textContent = "Свой цвет";
+    const sliders = document.createElement("div");
+    sliders.className = "light-sliders";
+    const preview = document.createElement("b");
+    preview.className = "light-preview";
+    function slider(name, min, max, value) {
+      const label = document.createElement("label");
+      label.append(document.createTextNode(name));
+      const input = document.createElement("input");
+      input.type = "range";
+      input.min = String(min);
+      input.max = String(max);
+      input.value = String(value);
+      label.append(input);
+      return { label: label, input: input };
+    }
+    const hue = slider("Оттенок", 0, 360, 32);
+    const sat = slider("Насыщенность", 1, 100, 70);
+    const val = slider("Яркость", 1, 100, 70);
+    function pushSliders() {
+      const spec = { h: Number(hue.input.value), s: Number(sat.input.value), v: Number(val.input.value) };
+      preview.style.background = hsvHex(spec.h, spec.s, spec.v);
+      stopAnim();
+      playing = "";
+      holdManual(env);
+      queue(env, spec, true);
+      markStudio();
+    }
+    [hue, sat, val].forEach(function (row) { row.input.addEventListener("input", pushSliders); });
+    preview.style.background = hsvHex(32, 70, 70);
+    sliders.append(preview, hue.label, sat.label, val.label);
+    const scenesTitle = document.createElement("h3");
+    scenesTitle.textContent = "Сценарии ширмы";
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = "Это свои сценарии комнаты, не сценарии Яндекса.";
+    const form = document.createElement("div");
+    form.className = "light-save";
+    const name = document.createElement("input");
+    name.type = "text";
+    name.placeholder = "Название";
+    name.setAttribute("aria-label", "Название сценария");
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Сохранить и закрепить";
+    save.addEventListener("click", function () {
+      const title = name.value.trim();
+      if (!title) return;
+      const mode = playing.indexOf("mode:") === 0 ? modeById(playing.slice(5)) : null;
+      const row = {
+        id: "sc-" + Date.now().toString(36),
+        name: title.slice(0, 40),
+        mode: mode ? mode.id : "",
+        h: mode ? mode.h : Number(hue.input.value),
+        s: mode ? mode.s : Number(sat.input.value),
+        v: mode ? mode.v : Number(val.input.value),
+        anim: !!(mode && mode.anim)
+      };
+      const bag = lightBag(env);
+      bag.scenarios.push(row);
+      if (bag.pins.indexOf(row.id) < 0) bag.pins.push(row.id);
+      name.value = "";
+      env.save();
+      fillStudio(root, env);
+      repaintDock();
+    });
+    form.append(name, save);
+    const list = document.createElement("div");
+    list.className = "light-scenes";
+    light.scenarios.forEach(function (row) {
+      const line = document.createElement("div");
+      line.className = "dock-line";
+      const play = document.createElement("button");
+      play.type = "button";
+      play.setAttribute("data-play", row.id);
+      play.textContent = row.name;
+      if (playing === row.id) play.className = "is-on";
+      play.addEventListener("click", function () { playKey(env, row.id); });
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.textContent = light.pins.indexOf(row.id) >= 0 ? "Открепить" : "Закрепить";
+      pin.addEventListener("click", function () { togglePin(env, row.id); fillStudio(root, env); });
+      const drop = document.createElement("button");
+      drop.type = "button";
+      drop.textContent = "×";
+      drop.title = "Удалить сценарий";
+      drop.addEventListener("click", function () {
+        const bag = lightBag(env);
+        bag.scenarios = bag.scenarios.filter(function (item) { return item.id !== row.id; });
+        bag.pins = bag.pins.filter(function (item) { return item !== row.id; });
+        env.save();
+        fillStudio(root, env);
+        repaintDock();
+      });
+      line.append(play, pin, drop);
+      list.append(line);
+    });
+    const autoBtn = document.createElement("button");
+    autoBtn.type = "button";
+    autoBtn.setAttribute("data-studio", "auto");
+    autoBtn.textContent = "Авто: локация, бой и таймер";
+    if (auto && !playing) autoBtn.className = "is-on";
+    autoBtn.addEventListener("click", function () { resumeAuto(env); markStudio(); });
+    body.append(modesTitle, grid, colorTitle, sliders, scenesTitle, note, form, list, autoBtn);
+  }
+
   function install(host) {
     host.add({
       id: "adaptive-light",
@@ -454,27 +814,29 @@
           document.addEventListener("pointerdown", away, true);
         }, 0);
       },
-      dockHtml: function () {
+      dockHtml: function (env) {
+        const pins = (env && lightBag(env).pins) || [];
+        const rows = pins.map(function (key) {
+          const on = playing === key ? " is-on" : "";
+          const safe = esc(key);
+          return '<div class="dock-line"><button type="button" data-light-play="' + safe + '" class="' + on.trim() + '"><i style="background:' + pinColor(env, key) + '"></i>' + esc(pinLabel(env, key)) + "</button>" +
+            '<button type="button" data-light-unpin="' + safe + '" title="Открепить" aria-label="Открепить">×</button></div>';
+        }).join("") || '<p class="note">Нет закреплённых режимов.</p>';
         return '<details class="dock-fold" data-fold="light" open><summary>Подсветка</summary>' +
-          '<div class="dock-form light-form"><label>Цвет<input data-light="force" type="color" value="' + (forcedHex || "#e6c36a") + '" aria-label="Свой цвет"></label>' +
-          '<button type="button" data-light="auto"' + (auto ? ' class="is-on"' : "") + ">Авто</button></div></details>";
+          rows +
+          '<div class="plugin-acts"><button type="button" data-light="auto"' + (auto && !playing ? ' class="is-on"' : "") + ">Авто</button>" +
+          '<button type="button" data-light="studio">Настроить</button></div></details>';
       },
       bindDock: function (root, env) {
-        const force = root.querySelector("[data-light=force]");
-        const button = root.querySelector("[data-light=auto]");
-        if (force) force.addEventListener("input", function () {
-          auto = false;
-          forcedHex = force.value;
-          if (button) button.classList.remove("is-on");
-          const hsv = hexHsv(force.value);
-          post(env, "/auto", { on: false }).catch(function () {});
-          if (hsv) queue(env, hsv, true);
+        const autoBtn = root.querySelector("[data-light=auto]");
+        if (autoBtn) autoBtn.addEventListener("click", function () { resumeAuto(env); });
+        const studio = root.querySelector("[data-light=studio]");
+        if (studio) studio.addEventListener("click", function () { openStudio(env); });
+        root.querySelectorAll("[data-light-play]").forEach(function (button) {
+          button.addEventListener("click", function () { playKey(env, button.getAttribute("data-light-play")); });
         });
-        if (button) button.addEventListener("click", function () {
-          auto = true;
-          button.classList.add("is-on");
-          lastKey = "";
-          post(env, "/auto", { on: true }).then(function () { apply(env); }).catch(function () {});
+        root.querySelectorAll("[data-light-unpin]").forEach(function (button) {
+          button.addEventListener("click", function () { togglePin(env, button.getAttribute("data-light-unpin")); });
         });
       }
     });
