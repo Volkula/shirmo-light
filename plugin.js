@@ -77,10 +77,26 @@
     return (battle && battle.player) || "#7dcea0";
   }
 
+  const pendingTone = {};
+  const toneSeq = {};
+
+  function lockedColor(loc, url) {
+    if (!loc || !url || loc.lampSrc !== url) return "";
+    return /^#[0-9a-f]{6}$/i.test(loc.lampColor || "") ? loc.lampColor : "";
+  }
+
+  function toneHex(loc, url) {
+    const row = loc && tones[loc.id];
+    if (!row || row.url !== url) return "";
+    return row.hex || "";
+  }
+
   function placeColor(loc) {
     if (!loc) return "";
-    if (/^#[0-9a-f]{6}$/i.test(loc.lampColor || "")) return loc.lampColor;
-    if (tones[loc.id]) return tones[loc.id];
+    const locked = lockedColor(loc, placeImage);
+    if (locked) return locked;
+    const tone = toneHex(loc, placeImage);
+    if (tone) return tone;
     if (!placeImage) return BACK;
     return "";
   }
@@ -88,16 +104,42 @@
   function paintSwatch(loc, color) {
     if (!loc || !color) return;
     document.querySelectorAll('[data-lamp="' + loc.id + '"]').forEach(function (node) {
-      if (loc.lampColor) return;
       node.style.setProperty("--swatch", color);
       node.style.backgroundColor = color;
     });
   }
 
+  function showPlace(loc, image) {
+    if (!loc) return;
+    if (loc.lampSrc && image && loc.lampSrc !== image) {
+      loc.lampColor = "";
+      loc.lampSrc = "";
+    }
+    const locked = lockedColor(loc, image);
+    if (locked) {
+      paintSwatch(loc, locked);
+      return;
+    }
+    const tone = toneHex(loc, image);
+    if (tone) paintSwatch(loc, tone);
+    else if (!image) paintSwatch(loc, BACK);
+  }
+
   function sample(env, url, loc) {
     if (!url || !loc) return;
+    const have = toneHex(loc, url);
+    if (have) {
+      paintSwatch(loc, have);
+      return;
+    }
+    if (pendingTone[loc.id] === url) return;
+    pendingTone[loc.id] = url;
+    const seq = (toneSeq[loc.id] || 0) + 1;
+    toneSeq[loc.id] = seq;
     const image = new Image();
     image.onload = function () {
+      if (toneSeq[loc.id] !== seq) return;
+      if (pendingTone[loc.id] === url) delete pendingTone[loc.id];
       try {
         const canvas = document.createElement("canvas");
         canvas.width = 96;
@@ -121,9 +163,9 @@
         const hex = "#" + [best.r, best.g, best.b].map(function (n) {
           return Math.round(n / best.n).toString(16).padStart(2, "0");
         }).join("");
-        tones[loc.id] = hex;
-        paintSwatch(loc, hex);
-        if (placeLoc && placeLoc.id === loc.id) apply(env);
+        tones[loc.id] = { url: url, hex: hex };
+        if (!lockedColor(loc, url)) paintSwatch(loc, hex);
+        if (placeLoc && placeLoc.id === loc.id && placeImage === url && env) apply(env);
       } catch (err) { /* картинка с чужого домена не красится */ }
     };
     image.src = url;
@@ -309,8 +351,12 @@
     const pixel = dropper.read((event.clientX - fit.x) / fit.scale, (event.clientY - fit.y) / fit.scale);
     if (pixel) {
       dropper.loc.lampColor = pixel.hex;
+      dropper.loc.lampSrc = placeImage || "";
       const swatch = document.querySelector('[data-lamp="' + dropper.loc.id + '"]');
-      if (swatch) swatch.style.setProperty("--swatch", pixel.hex);
+      if (swatch) {
+        swatch.style.setProperty("--swatch", pixel.hex);
+        swatch.style.backgroundColor = pixel.hex;
+      }
       const input = card && card.querySelector("[data-lamp-color]");
       if (input) input.value = pixel.hex;
       if (dropper.loc.lamp === true) apply(dropper.env);
@@ -755,8 +801,8 @@
       place: function (loc, image, env) {
         placeLoc = loc || null;
         placeImage = image || "";
-        if (loc && !loc.lampColor && tones[loc.id]) paintSwatch(loc, tones[loc.id]);
-        else if (loc && image && !loc.lampColor) sample(env, image, loc);
+        showPlace(loc, image);
+        if (loc && image && !lockedColor(loc, image) && !toneHex(loc, image)) sample(env, image, loc);
         apply(env);
       },
       turn: function (row, env) {
@@ -783,7 +829,7 @@
         const color = document.createElement("input");
         color.type = "color";
         color.setAttribute("data-lamp-color", "");
-        color.value = (/^#[0-9a-f]{6}$/i.test(loc.lampColor || "") && loc.lampColor) || tones[loc.id] || BACK;
+        color.value = lockedColor(loc, placeImage) || toneHex(loc, placeImage) || BACK;
         const pick = document.createElement("button");
         pick.type = "button";
         pick.textContent = "Пипетка";
@@ -800,7 +846,9 @@
         });
         color.addEventListener("input", function () {
           loc.lampColor = color.value;
+          loc.lampSrc = placeImage || "";
           anchor.style.setProperty("--swatch", color.value);
+          anchor.style.backgroundColor = color.value;
           try { if (env.save) env.save(); } catch (err) {}
           if (loc.lamp === true) apply(env);
         });
