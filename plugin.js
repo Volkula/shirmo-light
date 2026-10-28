@@ -90,6 +90,7 @@
     document.querySelectorAll('[data-lamp="' + loc.id + '"]').forEach(function (node) {
       if (loc.lampColor) return;
       node.style.setProperty("--swatch", color);
+      node.style.backgroundColor = color;
     });
   }
 
@@ -394,7 +395,8 @@
       place: function (loc, image, env) {
         placeLoc = loc || null;
         placeImage = image || "";
-        if (loc && image && !loc.lampColor && !tones[loc.id]) sample(env, image, loc);
+        if (loc && !loc.lampColor && tones[loc.id]) paintSwatch(loc, tones[loc.id]);
+        else if (loc && image && !loc.lampColor) sample(env, image, loc);
         apply(env);
       },
       turn: function (row, env) {
