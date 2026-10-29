@@ -62,6 +62,15 @@
     if (key === lastKey) return;
     lastKey = key;
     post(env, "/apply", body).catch(function () { lastKey = ""; });
+    share(body);
+  }
+
+  function share(body) {
+    if (!body || body.h == null || body.s == null || body.v == null) return;
+    try {
+      if (!window.ShirmoPlugins || !window.ShirmoPlugins.paintOthers) return;
+      window.ShirmoPlugins.paintOthers("adaptive-light", hsvHex(body.h, body.s, body.v), body.v);
+    } catch (err) {}
   }
 
   function queue(env, body, manual) {
