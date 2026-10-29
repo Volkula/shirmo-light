@@ -111,9 +111,8 @@
   const pendingTone = {};
   const toneSeq = {};
 
-  function lockedColor(loc, url) {
-    if (!loc || !url || loc.lampSrc !== url) return "";
-    return /^#[0-9a-f]{6}$/i.test(loc.lampColor || "") ? loc.lampColor : "";
+  function chosenColor(loc) {
+    return /^#[0-9a-f]{6}$/i.test(loc && loc.lampColor || "") ? loc.lampColor : "";
   }
 
   function toneHex(loc, url) {
@@ -133,8 +132,8 @@
     const tone = toneOf(loc);
     if (tone && tone.color) return tone.color;
     if (!loc) return "";
-    const locked = lockedColor(loc, placeImage);
-    if (locked) return locked;
+    const chosen = chosenColor(loc);
+    if (chosen) return chosen;
     const sampled = toneHex(loc, placeImage);
     if (sampled) return sampled;
     if (!placeImage) return BACK;
@@ -176,13 +175,9 @@
 
   function showPlace(loc, image) {
     if (!loc) return;
-    if (loc.lampSrc && image && loc.lampSrc !== image) {
-      loc.lampColor = "";
-      loc.lampSrc = "";
-    }
-    const locked = lockedColor(loc, image);
-    if (locked) {
-      paintSwatch(loc, locked);
+    const chosen = chosenColor(loc);
+    if (chosen) {
+      paintSwatch(loc, chosen);
       return;
     }
     const tone = toneHex(loc, image);
@@ -229,7 +224,7 @@
           return Math.round(n / best.n).toString(16).padStart(2, "0");
         }).join("");
         tones[loc.id] = { url: url, hex: hex };
-        if (!lockedColor(loc, url)) paintSwatch(loc, hex);
+        if (!chosenColor(loc)) paintSwatch(loc, hex);
         if (placeLoc && placeLoc.id === loc.id && placeImage === url && env) apply(env);
       } catch (err) { /* картинка с чужого домена не красится */ }
     };
@@ -907,7 +902,7 @@
         placeLoc = loc || null;
         placeImage = image || "";
         showPlace(loc, image);
-        if (loc && image && !lockedColor(loc, image) && !toneHex(loc, image)) sample(env, image, loc);
+        if (loc && image && !chosenColor(loc) && !toneHex(loc, image)) sample(env, image, loc);
         apply(env);
       },
       turn: function (row, env) {
@@ -934,7 +929,7 @@
         const color = document.createElement("input");
         color.type = "color";
         color.setAttribute("data-lamp-color", "");
-        const hex = lockedColor(loc, placeImage) || toneHex(loc, placeImage) || BACK;
+        const hex = chosenColor(loc) || toneHex(loc, placeImage) || BACK;
         color.value = hex;
         const level = document.createElement("label");
         level.className = "plugin-field";
