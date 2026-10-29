@@ -114,6 +114,30 @@
     return "";
   }
 
+  function brightStored(loc) {
+    if (!loc || loc.lampBright == null || loc.lampBright === "") return null;
+    const n = Number(loc.lampBright);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(100, Math.round(n)));
+  }
+
+  function setBrightUi(card, value) {
+    if (!card) return;
+    const n = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+    const range = card.querySelector("[data-lamp-bright]");
+    const title = card.querySelector("[data-lamp-bright-label]");
+    if (range) range.value = String(n);
+    if (title) title.textContent = "Яркость " + n;
+  }
+
+  function placeHsv(loc) {
+    const hsv = hexHsv(placeColor(loc));
+    if (!hsv) return null;
+    const level = brightStored(loc);
+    if (level != null) hsv.v = level;
+    return hsv;
+  }
+
   function paintSwatch(loc, color) {
     if (!loc || !color) return;
     document.querySelectorAll('[data-lamp="' + loc.id + '"]').forEach(function (node) {
@@ -202,7 +226,7 @@
         return;
       }
       if (placeLoc && placeLoc.lamp === true) {
-        const hsv = hexHsv(placeColor(placeLoc));
+        const hsv = placeHsv(placeLoc);
         if (hsv) queue(env, hsv, false);
       }
     } catch (err) { /* смена цвета не должна ронять ширму */ }
@@ -377,6 +401,7 @@
       }
       const input = card && card.querySelector("[data-lamp-color]");
       if (input) input.value = pixel.hex;
+      if (brightStored(dropper.loc) == null) setBrightUi(card, pixel.v);
       if (dropper.loc.lamp === true) apply(dropper.env);
       try { if (dropper.env.save) dropper.env.save(); } catch (err) {}
     }
@@ -849,11 +874,26 @@
         const color = document.createElement("input");
         color.type = "color";
         color.setAttribute("data-lamp-color", "");
-        color.value = lockedColor(loc, placeImage) || toneHex(loc, placeImage) || BACK;
+        const hex = lockedColor(loc, placeImage) || toneHex(loc, placeImage) || BACK;
+        color.value = hex;
+        const level = document.createElement("label");
+        level.className = "plugin-field";
+        const title = document.createElement("span");
+        title.setAttribute("data-lamp-bright-label", "");
+        const range = document.createElement("input");
+        range.type = "range";
+        range.min = "0";
+        range.max = "100";
+        range.setAttribute("data-lamp-bright", "");
+        const stored = brightStored(loc);
+        const start = stored != null ? stored : ((hexHsv(hex) || {}).v || 100);
+        range.value = String(start);
+        title.textContent = "Яркость " + start;
+        level.append(title, range);
         const pick = document.createElement("button");
         pick.type = "button";
         pick.textContent = "Пипетка";
-        card.append(on, color, pick);
+        card.append(on, color, level, pick);
         document.body.append(card);
         const rect = anchor.getBoundingClientRect();
         card.style.left = Math.min(window.innerWidth - 220, rect.right + 8) + "px";
@@ -869,6 +909,17 @@
           loc.lampSrc = placeImage || "";
           anchor.style.setProperty("--swatch", color.value);
           anchor.style.backgroundColor = color.value;
+          if (brightStored(loc) == null) {
+            const hsv = hexHsv(color.value);
+            if (hsv) setBrightUi(card, hsv.v);
+          }
+          try { if (env.save) env.save(); } catch (err) {}
+          if (loc.lamp === true) apply(env);
+        });
+        range.addEventListener("input", function () {
+          const n = Math.max(0, Math.min(100, Math.round(Number(range.value) || 0)));
+          loc.lampBright = n;
+          title.textContent = "Яркость " + n;
           try { if (env.save) env.save(); } catch (err) {}
           if (loc.lamp === true) apply(env);
         });
