@@ -152,7 +152,7 @@
     const hsv = hexHsv(placeColor(loc));
     if (!hsv) return null;
     const level = brightStored(loc);
-    if (level != null) hsv.v = level;
+    hsv.v = level != null ? level : 30;
     return hsv;
   }
 
@@ -504,7 +504,15 @@
     const light = campaign.plugins.light;
     if (!Array.isArray(light.scenarios)) light.scenarios = [];
     if (!Array.isArray(light.pins)) light.pins = [];
+    if (!light.levels || typeof light.levels !== "object" || Array.isArray(light.levels)) light.levels = {};
     return light;
+  }
+
+  function lampLevel(env, id) {
+    const levels = lightBag(env).levels;
+    const n = Number(levels[id]);
+    if (!Number.isFinite(n)) return 30;
+    return Math.max(1, Math.min(100, Math.round(n)));
   }
 
   function stopAnim() {
@@ -710,12 +718,15 @@
       bright.min = "1";
       bright.max = "100";
       bright.step = "1";
-      bright.value = "80";
+      bright.value = String(lampLevel(env, lamp.id));
       bright.setAttribute("aria-label", "Яркость " + (lamp.name || "лампы"));
       bright.style.flex = "1";
       bright.style.minWidth = "72px";
       bright.addEventListener("input", function () {
         const level = Math.max(1, Math.min(100, Math.round(Number(bright.value) || 1)));
+        const light = lightBag(env);
+        light.levels[lamp.id] = level;
+        try { env.save(); } catch (err) {}
         send(env, { brightness: level, ids: [lamp.id], manual: true, steady: true }, true);
       });
       const power = document.createElement("button");
@@ -785,7 +796,7 @@
     }
     const hue = slider("Оттенок", 0, 360, 32);
     const sat = slider("Насыщенность", 1, 100, 70);
-    const val = slider("Яркость", 1, 100, 70);
+    const val = slider("Яркость", 1, 100, 30);
     function pushSliders() {
       const spec = { h: Number(hue.input.value), s: Number(sat.input.value), v: Number(val.input.value) };
       preview.style.background = hsvHex(spec.h, spec.s, spec.v);
@@ -921,7 +932,7 @@
         range.max = "100";
         range.setAttribute("data-lamp-bright", "");
         const stored = brightStored(loc);
-        const start = stored != null ? stored : ((hexHsv(hex) || {}).v || 100);
+        const start = stored != null ? stored : 30;
         range.value = String(start);
         title.textContent = "Яркость " + start;
         level.append(title, range);
@@ -944,10 +955,7 @@
           loc.lampSrc = placeImage || "";
           anchor.style.setProperty("--swatch", color.value);
           anchor.style.backgroundColor = color.value;
-          if (brightStored(loc) == null) {
-            const hsv = hexHsv(color.value);
-            if (hsv) setBrightUi(card, hsv.v);
-          }
+          if (brightStored(loc) == null) setBrightUi(card, 30);
           try { if (env.save) env.save(); } catch (err) {}
           if (loc.lamp === true) apply(env);
         });
