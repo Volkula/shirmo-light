@@ -122,12 +122,21 @@
     return row.hex || "";
   }
 
+  function toneOf(loc) {
+    try {
+      if (window.ShirmoTone && window.ShirmoTone.read) return window.ShirmoTone.read(loc) || null;
+    } catch (err) {}
+    return null;
+  }
+
   function placeColor(loc) {
+    const tone = toneOf(loc);
+    if (tone && tone.color) return tone.color;
     if (!loc) return "";
     const locked = lockedColor(loc, placeImage);
     if (locked) return locked;
-    const tone = toneHex(loc, placeImage);
-    if (tone) return tone;
+    const sampled = toneHex(loc, placeImage);
+    if (sampled) return sampled;
     if (!placeImage) return BACK;
     return "";
   }
@@ -151,7 +160,8 @@
   function placeHsv(loc) {
     const hsv = hexHsv(placeColor(loc));
     if (!hsv) return null;
-    const level = brightStored(loc);
+    const tone = toneOf(loc);
+    const level = tone && tone.bright != null ? tone.bright : brightStored(loc);
     hsv.v = level != null ? level : 30;
     return hsv;
   }
@@ -885,9 +895,13 @@
   }
 
   function install(host) {
+    window.addEventListener("shirmo-tone", function () {
+      try { if (envRef) apply(envRef); } catch (err) {}
+    });
     host.add({
       id: "adaptive-light",
       mapFlag: true,
+      icon: '<circle cx="12" cy="12" r="3.2" fill="currentColor"/><path d="M12 3.5v2.2M12 18.3v2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M3.5 12h2.2M18.3 12h2.2M5.2 18.8l1.6-1.6M17.2 6.8l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
       settings: settings,
       place: function (loc, image, env) {
         placeLoc = loc || null;
