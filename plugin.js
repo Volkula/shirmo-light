@@ -20,7 +20,8 @@
   const tones = {};
 
   let envRef = null;
-  let yandexFrameAt = 0;
+  let yandexFlight = null;
+  let yandexNext = null;
 
   function lampHsv(r, g, b) {
     r /= 255;
@@ -58,11 +59,28 @@
 
   function send(env, body, manual) {
     if (!manual && !auto) return;
+    if (!body || !body.quiet) share(body);
     const key = JSON.stringify(body);
-    if (key === lastKey) return;
-    lastKey = key;
-    post(env, "/apply", body).catch(function () { lastKey = ""; });
-    share(body);
+    if (key === lastKey && !yandexNext) return;
+    yandexNext = { env: env, body: body, key: key };
+    pumpYandex();
+  }
+
+  function pumpYandex() {
+    if (yandexFlight || !yandexNext) return;
+    const job = yandexNext;
+    yandexNext = null;
+    if (job.key === lastKey) {
+      pumpYandex();
+      return;
+    }
+    lastKey = job.key;
+    yandexFlight = post(job.env, "/apply", job.body).catch(function () {
+      lastKey = "";
+    }).then(function () {
+      yandexFlight = null;
+      pumpYandex();
+    });
   }
 
   function share(body) {
@@ -518,13 +536,17 @@
   function startAnim(env, mode) {
     stopAnim();
     let tick = 0;
+    let first = true;
     function frame() {
       tick += 1;
       const drift = mode.drift || 8;
       const wave = Math.sin(tick * 1.4);
       const v = Math.max(12, Math.min(100, Math.round(mode.v + wave * drift)));
       const h = (mode.h + Math.round(Math.sin(tick * 0.6) * drift * 0.35) + 360) % 360;
-      queue(env, { h: h, s: mode.s, v: v }, true);
+      const body = { h: h, s: mode.s, v: v };
+      if (!first) body.steady = true;
+      first = false;
+      queue(env, body, true);
     }
     frame();
     animTimer = setInterval(frame, mode.speed || 700);
@@ -683,6 +705,19 @@
         post(env, "/devices", { ids: ids }).catch(function (error) { env.note(error.message); });
       });
       label.append(input, document.createTextNode(lamp.name || "Лампа"));
+      const bright = document.createElement("input");
+      bright.type = "range";
+      bright.min = "1";
+      bright.max = "100";
+      bright.step = "1";
+      bright.value = "80";
+      bright.setAttribute("aria-label", "Яркость " + (lamp.name || "лампы"));
+      bright.style.flex = "1";
+      bright.style.minWidth = "72px";
+      bright.addEventListener("input", function () {
+        const level = Math.max(1, Math.min(100, Math.round(Number(bright.value) || 1)));
+        send(env, { brightness: level, ids: [lamp.id], manual: true, steady: true }, true);
+      });
       const power = document.createElement("button");
       power.type = "button";
       power.textContent = lamp.on ? "Выкл" : "Вкл";
@@ -693,7 +728,7 @@
           lamp.on = next;
         }).catch(function (error) { env.note(error.message); });
       });
-      line.append(label, power);
+      line.append(label, bright, power);
       body.append(line);
     });
     const modesTitle = document.createElement("h3");
@@ -981,15 +1016,11 @@
             holdManual(envRef);
           }
         },
-        frame: function (rgb, brightness, force) {
+        frame: function (rgb, brightness) {
           if (!envRef || !rgb) return;
-          const now = Date.now();
-          if (!force && now - yandexFrameAt < 400) return;
-          yandexFrameAt = now;
           const hsv = lampHsv(rgb[0], rgb[1], rgb[2]);
           hsv.v = Math.max(1, Math.min(100, Math.round(brightness)));
-          lastKey = "";
-          send(envRef, Object.assign({ manual: true }, hsv), true);
+          send(envRef, Object.assign({ manual: true, steady: true, quiet: true }, hsv), true);
         }
       }
     });
