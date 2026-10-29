@@ -236,21 +236,29 @@
     catch (err) { return false; }
   }
 
+  let armed = "";
+
   function apply(env) {
     try {
       if (!auto) return;
       if (effect && FX[effect]) {
+        armed = "";
         queue(env, Object.assign({ effect: effect }, FX[effect]), false);
         return;
       }
       if (fightOn(env) && actor) {
+        armed = "";
         const hsv = hexHsv(turnColor(env, actor));
         if (hsv) queue(env, hsv, false);
         return;
       }
       if (placeLoc && placeLoc.lamp === true) {
         const hsv = placeHsv(placeLoc);
-        if (hsv) queue(env, hsv, false);
+        if (!hsv) return;
+        const mark = placeLoc.id + ":" + hsv.h + ":" + hsv.s + ":" + hsv.v;
+        if (mark === armed) return;
+        armed = mark;
+        queue(env, hsv, false);
       }
     } catch (err) { /* смена цвета не должна ронять ширму */ }
   }
